@@ -37,7 +37,7 @@ class ViewController: UIViewController,UIAccelerometerDelegate{
     let segmentAngleBack = 10.0
     let imageRectWidth = CGFloat(600)
     let imageRectHeight = CGFloat(800)
-
+    
     
     func captureImage(){
         if let videoConnection = stillImageOutput!.connectionWithMediaType(AVMediaTypeVideo) {
@@ -50,7 +50,7 @@ class ViewController: UIViewController,UIAccelerometerDelegate{
                     let cgImageRef = CGImageCreateWithJPEGDataProvider(dataProvider, nil, true, CGColorRenderingIntent.RenderingIntentDefault)
                     
                     var image = UIImage(CGImage: cgImageRef!, scale: 1, orientation: UIImageOrientation.Right)
-                    self.resizeImage(&image)
+                    self.resizeImage(&image)                    
                     
                     //                    var newImage:UIImage?
                     //                    self.processing.text = "stitching..."
@@ -89,20 +89,29 @@ class ViewController: UIViewController,UIAccelerometerDelegate{
                     //                    if self.takedNum % (ceil(self.segmentAngle/self.deltaAngle)) == 0 && self.imageArray.count > 1{
                     //                        UIImageWriteToSavedPhotosAlbum(CVWrapper.processWithArray(self.imageArray) as UIImage, self, #selector(ViewController.image(_:didFinishSavingWithError:contextInfo:)), nil)
                     //                    }
-                    if self.takedNum % (floor(self.segmentAngle/self.deltaAngle)) == 0 && self.imageArray.count > 1{
-                        let temppanarama = CVWrapper.processPanoramaWithArray(self.imageArray) as UIImage
-                        self.panoramaArray.append(temppanarama)
-                        UIImageWriteToSavedPhotosAlbum(temppanarama, self, #selector(ViewController.image(_:didFinishSavingWithError:contextInfo:)), nil)
-                        self.imageArray.removeAll()
-//                        if self.isforth {
-//                            self.currentAngle -= self.segmentAngleBack
-//                        }else{
-//                            self.currentAngle += self.segmentAngleBack
-//                            if self.currentAngle >= 180 {
-//                                self.isforth = true
-//                                self.currentAngle = 360 - self.currentAngle
-//                            }
-//                        }
+                    if self.takedNum % (floor(self.segmentAngle/self.deltaAngle)+1) == 0 && self.imageArray.count > 1{
+                        //在后台队列拼接图片
+                        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0)) {
+                            let tempImageArray = self.imageArray
+                            self.imageArray.removeAll()
+                            let temppanarama = CVWrapper.processPanoramaWithArray(tempImageArray) as UIImage
+                            self.panoramaArray.append(temppanarama)
+                            dispatch_async(dispatch_get_main_queue(), {
+                                UIImageWriteToSavedPhotosAlbum(temppanarama, self, #selector(ViewController.image(_:didFinishSavingWithError:contextInfo:)), nil)
+                            })
+                        }
+                        //                        if self.isforth {
+                        //                            self.currentAngle -= self.segmentAngleBack
+                        //                        }else{
+                        //                            self.currentAngle += self.segmentAngleBack
+                        //                            if self.currentAngle >= 180 {
+                        //                                self.isforth = true
+                        //                                self.currentAngle = 360 - self.currentAngle
+                        //                            }
+                        //                        }
+                        while(!self.imageArray.isEmpty){
+                            sleep(1)
+                        }
                     }
                     self.takedNum+=1
                     self.capturedImage.image = image
@@ -182,21 +191,108 @@ class ViewController: UIViewController,UIAccelerometerDelegate{
             UIImageWriteToSavedPhotosAlbum(temppanarama, self, #selector(ViewController.image(_:didFinishSavingWithError:contextInfo:)), nil)
             self.imageArray.removeAll()
         }
-        
+        while(!self.imageArray.isEmpty){
+            sleep(1)
+        }
         //在后台队列拼接图片
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0)) {
-            let stitchedImage:UIImage = CVWrapper.processWithArray(self.panoramaArray) as UIImage
-            
+            let stitchedImage = CVWrapper.processWithArray(self.panoramaArray) as UIImage
+            self.panoramaArray.removeAll()
+            let finalImage = CVWrapper.processWithArray(self.splitImageToReverseArray(stitchedImage))
             dispatch_async(dispatch_get_main_queue(), {
-                self.capturedImage.image = stitchedImage
+                self.capturedImage.image = finalImage
                 //停止环形进度条效果
                 self.spinner.stopAnimating()
-                UIImageWriteToSavedPhotosAlbum(stitchedImage, self, #selector(ViewController.image(_:didFinishSavingWithError:contextInfo:)), nil)
+                UIImageWriteToSavedPhotosAlbum(finalImage, self, #selector(ViewController.image(_:didFinishSavingWithError:contextInfo:)), nil)
+                self.uploadImage(finalImage)
                 self.processing.text = "finish"
                 
                 print("finish")
             })
         }
+    }
+    
+    func uploadImage(image:UIImage)
+    {
+        let url = NSURL(string: "http://10.235.24.45:8086/upload")
+        
+        let request = NSMutableURLRequest(URL: url!)
+        request.HTTPMethod = "POST"
+        
+        let boundary = generateBoundaryString()
+        
+        //define the multipart request type
+        
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        
+        let image_data = UIImageJPEGRepresentation(image, 1)
+        
+        
+        if(image_data == nil)
+        {
+            return
+        }
+        
+        let body = NSMutableData()
+        
+        let fname = "test.jpg"
+        let mimetype = "image/jpeg"
+        
+        //define the data post parameter
+        
+        body.appendData("--\(boundary)\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+        body.appendData("Content-Disposition:form-data; name=\"test\"\r\n\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+        body.appendData("hi\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+        
+        
+        
+        body.appendData("--\(boundary)\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+        body.appendData("Content-Disposition:form-data; name=\"uploadfile\"; filename=\"\(fname)\"\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+        body.appendData("Content-Type: \(mimetype)\r\n\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+        body.appendData(image_data!)
+        body.appendData("\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+        
+        
+        body.appendData("--\(boundary)--\r\n".dataUsingEncoding(NSUTF8StringEncoding)!)
+        
+        
+        
+        request.HTTPBody = body
+        
+        
+        
+        let session = NSURLSession.sharedSession()
+        
+        
+        let task = session.dataTaskWithRequest(request) {
+            (let data, let response, let error) in
+            
+            guard let _:NSData = data, let _:NSURLResponse = response  where error == nil else {
+                print(error)
+                print("error")
+                return
+            }
+            
+            let dataString = NSString(data: data!, encoding: NSUTF8StringEncoding)
+            print(dataString)
+            
+        }
+        
+        task.resume()
+    }
+    
+    
+    func generateBoundaryString() -> String
+    {
+        return "Boundary-\(NSUUID().UUIDString)"
+    }
+    
+    func splitImageToReverseArray(image: UIImage)->[UIImage]{
+        let cgLeft = CGImageCreateWithImageInRect(image.CGImage, CGRectMake(0, 0, image.size.width/2, image.size.height))
+        let left = UIImage(CGImage: cgLeft!)
+        let cgRight = CGImageCreateWithImageInRect(image.CGImage, CGRectMake(image.size.width/2, 0, image.size.width, image.size.height))
+        let right = UIImage(CGImage: cgRight!)
+        return [right,left];
     }
     
     var captureSession: AVCaptureSession?
@@ -231,6 +327,8 @@ class ViewController: UIViewController,UIAccelerometerDelegate{
         self.nextCapture = true
         isforth = true
         var lastTake = false
+        var lastforth = false
+        
         self.motionManager.stopDeviceMotionUpdates()
         self.capturedImage.image = nil
         if(motionManager.deviceMotionAvailable){
@@ -253,8 +351,10 @@ class ViewController: UIViewController,UIAccelerometerDelegate{
                         //dump(currentAngle)
                         //dump(self.motionLastRoll)
                         if self.nextCapture {
-                            if self.currentAngle + self.deltaAngle >= 180{
-                                self.currentAngle = 180
+                            if self.currentAngle == 179 {
+                                lastforth = true
+                            }else if self.currentAngle + self.deltaAngle >= 180{
+                                self.currentAngle = 179
                             }else{
                                 self.currentAngle += self.deltaAngle
                             }
@@ -263,13 +363,14 @@ class ViewController: UIViewController,UIAccelerometerDelegate{
                             self.currentAngle -= 1
                         }
                     }
-                    if(self.currentAngle == 180){
+                    if(lastforth){
                         self.isforth = false
+                        self.currentAngle = 180
                         
-//                        let temppanarama = CVWrapper.processPanoramaWithArray(self.imageArray) as UIImage
-//                        self.panoramaArray.append(temppanarama)
-//                        UIImageWriteToSavedPhotosAlbum(temppanarama, self, #selector(ViewController.image(_:didFinishSavingWithError:contextInfo:)), nil)
-//                        self.imageArray.removeAll()
+                        //                        let temppanarama = CVWrapper.processPanoramaWithArray(self.imageArray) as UIImage
+                        //                        self.panoramaArray.append(temppanarama)
+                        //                        UIImageWriteToSavedPhotosAlbum(temppanarama, self, #selector(ViewController.image(_:didFinishSavingWithError:contextInfo:)), nil)
+                        //                        self.imageArray.removeAll()
                         
                         //                        UIImageWriteToSavedPhotosAlbum(CVWrapper.processWithArray(self.imageArray) as UIImage, self, #selector(ViewController.image(_:didFinishSavingWithError:contextInfo:)), nil)
                     }
@@ -300,10 +401,10 @@ class ViewController: UIViewController,UIAccelerometerDelegate{
                         self.isCaptureEnd = true
                         self.motionManager.stopDeviceMotionUpdates()
                         
-//                        let temppanarama = CVWrapper.processPanoramaWithArray(self.imageArray) as UIImage
-//                        self.panoramaArray.append(temppanarama)
-//                        UIImageWriteToSavedPhotosAlbum(temppanarama, self, #selector(ViewController.image(_:didFinishSavingWithError:contextInfo:)), nil)
-//                        self.imageArray.removeAll()
+                        //                        let temppanarama = CVWrapper.processPanoramaWithArray(self.imageArray) as UIImage
+                        //                        self.panoramaArray.append(temppanarama)
+                        //                        UIImageWriteToSavedPhotosAlbum(temppanarama, self, #selector(ViewController.image(_:didFinishSavingWithError:contextInfo:)), nil)
+                        //                        self.imageArray.removeAll()
                         
                         self.doStitch()
                         //UIImageWriteToSavedPhotosAlbum(self.capturedImage.image!, self, #selector(ViewController.image(_:didFinishSavingWithError:contextInfo:)), nil)
